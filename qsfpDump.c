@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <i2cUtils.h>
 #include <string.h>
+#include <time.h>
 
 typedef struct PortData_s {
 	float 	Temperature;
@@ -52,6 +53,8 @@ int upper_page03h=3;
 int read_eeprom(int page, int *value) {
 	int err = 0;
 	int idx = 0;
+	int value1[256];
+    time_t mytime;
 	if (page == upper_page00h) {
 		err = i2cSet(0, 0x50, 0x7f, 0x00);
 		if (err != 0) {
@@ -66,9 +69,30 @@ int read_eeprom(int page, int *value) {
 		}
 	}
 
+    mytime = time(NULL);
+    printf("%s\n",ctime(&mytime));
 	for (idx = 0; idx < 256; idx++) {
 		value[idx] = i2cGet(0, 0x50, idx);
 	}
+	printf("Value from get:");
+	for (idx = 0; idx < 256; idx++) {
+		printf("%d ", value[idx]);
+	}
+	printf("\n");
+    mytime = time(NULL);
+    printf("%s\n",ctime(&mytime));
+	err = i2cBulkGet(0, 0x50, 0, 256, value1);
+	if (err != 0) {
+		printf("Err doing bulk get");
+	} else {
+		printf("Value from get:");
+		for (idx = 0; idx < 256; idx++) {
+			printf("%d ", value1[idx]);
+		}
+		printf("\n");
+	}
+    mytime = time(NULL);
+    printf("%s\n",ctime(&mytime));
 	return err;
 }
 
@@ -297,5 +321,5 @@ int main() {
 	memset(portData, 0, sizeof(PortData_t));
 	get_data_from_lower_memory(2, portData);
 	get_data_from_upper_page00h(2, portData);
-	printData(portData);
+	//printData(portData);
 }

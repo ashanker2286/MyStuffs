@@ -29,6 +29,18 @@ __s32 i2c_smbus_access(int file, char read_write, __u8 command,
         return err;
 }
 
+__s32 i2c_smbus_read_word_data(int file, __u8 command)
+{
+        union i2c_smbus_data data;
+        int err;
+
+        err = i2c_smbus_access(file, I2C_SMBUS_READ, command,
+                               I2C_SMBUS_WORD_DATA, &data);
+        if (err < 0)
+                return err;
+
+        return 0x0FFFF & data.word;
+}
 
 
 __s32 i2c_smbus_read_byte_data(int file, __u8 command)
@@ -126,7 +138,7 @@ int set_slave_addr(int file, int address)
         return 0;
 }
 
-static int check_funcs(int file)
+static int check_funcs(int file, int size)
 {
 	unsigned long funcs;
 
@@ -137,9 +149,23 @@ static int check_funcs(int file)
 		return -1;
 	}
 
-	if (!(funcs & I2C_FUNC_SMBUS_WRITE_BYTE_DATA)) {
-		fprintf(stderr, MISSING_FUNC_FMT, "SMBus write byte");
-		return -1;
+	switch (size) {
+	case I2C_SMBUS_BYTE_DATA:
+		if (!(funcs & I2C_FUNC_SMBUS_WRITE_BYTE_DATA)) {
+			fprintf(stderr, MISSING_FUNC_FMT, "SMBus write byte");
+			return -1;
+		}
+		if (!(funcs & I2C_FUNC_SMBUS_READ_BYTE_DATA)) {
+			fprintf(stderr, MISSING_FUNC_FMT, "SMBus write byte");
+			return -1;
+		}
+		break;
+        case I2C_SMBUS_WORD_DATA:
+                if (!(funcs & I2C_FUNC_SMBUS_READ_WORD_DATA)) {
+                        fprintf(stderr, MISSING_FUNC_FMT, "SMBus read word");
+                        return -1; 
+                }
+                break;
 	}
 
 	return 0;
@@ -150,6 +176,7 @@ int i2cSet(int i2cBusNum, int chipAddr, int dataAddr, int val)
 	int res, i2cbus, address, file;
 	int value, daddress;
 	char filename[20];
+	int size;
 
 	i2cbus = lookup_i2c_bus(i2cBusNum);
 	if (i2cbus < 0)
@@ -172,10 +199,11 @@ int i2cSet(int i2cBusNum, int chipAddr, int dataAddr, int val)
 		return -1;
 	}
 
-	printf("I2CBus = %d Address = %d\n", i2cbus, address);
+	//printf("I2CBus = %d Address = %d\n", i2cbus, address);
 	file = open_i2c_dev(i2cbus, filename, sizeof(filename));
+	size = I2C_SMBUS_BYTE_DATA;
 	if (file < 0
-	 || check_funcs(file)
+	 || check_funcs(file, size)
 	 || set_slave_addr(file, address))
 		return -1;
 
@@ -191,11 +219,71 @@ int i2cSet(int i2cBusNum, int chipAddr, int dataAddr, int val)
 	return 0;
 }
 
+int i2cBulkGet(int i2cBusNum, int chipAddr, int dataAddr, int numOfBytes, int *val)
+{
+        int res, i2cbus, address, file;
+        int daddress;
+        char filename[20];
+	int size, idx;
+	int read_byte_supported = 0;
+	int read_word_supported = 0;
+
+	numOfWords = numOfBytes/3;
+	remNumOfBytes = numOfBytes%3;
+        i2cbus = lookup_i2c_bus(i2cBusNum);
+        if (i2cbus < 0)
+		return -1;
+
+        address = parse_i2c_address(chipAddr);
+        if (address < 0)
+		return -1;
+
+	daddress = dataAddr; 
+	printf("max dataAddr: %d\n", dataAddr+numOfWords-1);
+	if (daddress < 0 || (daddress + numOfWords-1  > 0xff)) {
+		fprintf(stderr, "Error: Data address invalid!\n");
+		return -1;
+	}
+
+	//printf("I2C_SMBUS_WORD_DATA=%d\n", I2C_SMBUS_WORD_DATA);
+        file = open_i2c_dev(i2cbus, filename, sizeof(filename));
+        if (file < 0) {
+		return -1;
+	}
+	if (check_funcs(file, I2C_SMBUS_WORD_DATA) == 0) {
+		read_word_supported = 1;
+	}
+	if (check_funcs(file, I2C_SMBUS_BYTE_DATA) == 0) {
+		read_byte_supported = 1;
+	}
+	if (read_byte_supported == 0) {
+		return -1;
+	}
+        if (set_slave_addr(file, address)) {
+		return -1;
+	}
+
+	
+        for (idx = 0; idx < numOfWords; idx++) {
+		res = i2c_smbus_read_byte_data(file, daddress);
+		if (res < 0) {
+        		close(file);
+			fprintf(stderr, "Error: Read failed\n");
+			return -1;
+		}
+		val[idx] = res;
+		daddress += 1;
+	}
+
+        return 0;
+}
+
 int i2cGet(int i2cBusNum, int chipAddr, int dataAddr)
 {
         int res, i2cbus, address, file;
         int daddress;
         char filename[20];
+	int size;
 
         i2cbus = lookup_i2c_bus(i2cBusNum);
         if (i2cbus < 0)
@@ -206,27 +294,25 @@ int i2cGet(int i2cBusNum, int chipAddr, int dataAddr)
 		return -1;
 
 	daddress = dataAddr; 
-	if (daddress < 0 || daddress > 0xff) {
+	if (daddress < 0 || (daddress  > 0xff)) {
 		fprintf(stderr, "Error: Data address invalid!\n");
 		return -1;
 	}
 
+	size = I2C_SMBUS_BYTE_DATA;
+	//printf("I2C_SMBUS_WORD_DATA=%d\n", I2C_SMBUS_WORD_DATA);
         file = open_i2c_dev(i2cbus, filename, sizeof(filename));
         if (file < 0
-         || check_funcs(file)
+         || check_funcs(file, size)
          || set_slave_addr(file, address))
 		return -1;
 
         res = i2c_smbus_read_byte_data(file, daddress);
         close(file);
-
-        if (res < 0) {
-                fprintf(stderr, "Error: Read failed\n");
-                return -1;
-        }
-
-        printf("0x%0*x\n", 2, res);
+	if (res < 0) {
+		fprintf(stderr, "Error: Read failed\n");
+		return -1;
+	}
 
         return res;
 }
-
